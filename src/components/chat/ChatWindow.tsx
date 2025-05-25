@@ -19,7 +19,10 @@ import { useState, useCallback } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { VideoCallView } from "./VideoCallView"; 
 
-const GENERAL_CHAT_CALL_ID = "call_channel_general_chat";
+// Use type-specific IDs for the general chat channel
+const GENERAL_CHAT_AUDIO_CALL_ID = "call_channel_general_chat_audio";
+const GENERAL_CHAT_VIDEO_CALL_ID = "call_channel_general_chat_video";
+
 
 type CallType = "video" | "audio";
 
@@ -60,12 +63,16 @@ export function ChatWindow() {
   }, []);
 
   const startCall = (type: CallType) => {
-    if (isCallActive) {
-      // If a call is active, clicking any call button (even different type) ends the current call.
-      // If it was the same type, it effectively acts as an end call button.
-      // If it was a different type, it ends current then immediately starts new (handled by VideoCallView re-mount)
-      handleEndCall(); 
-      if (type === currentCallType) return; // If ending the same type, don't immediately restart
+    if (isCallActive && currentCallType === type) {
+      // If the same type of call button is clicked again, end the current call
+      handleEndCall();
+      return; 
+    }
+    
+    if (isCallActive && currentCallType !== type) {
+        // If a different type of call button is clicked while a call is active, end the current one first.
+        // VideoCallView will unmount, then a new one will mount for the new type.
+        handleEndCall();
     }
     
     if (!currentUser) {
@@ -73,13 +80,13 @@ export function ChatWindow() {
       return;
     }
     
-    // For General Chat, we use a fixed call ID.
-    // In a real app, you'd generate unique IDs for different calls or use room-based IDs.
-    const callId = GENERAL_CHAT_CALL_ID; 
+    // Determine the call ID based on the type for the general chat
+    const callId = type === "audio" ? GENERAL_CHAT_AUDIO_CALL_ID : GENERAL_CHAT_VIDEO_CALL_ID;
+    
     setCurrentCallId(callId);
     setCurrentCallType(type);
     setIsCallActive(true); // This will render VideoCallView
-    console.log(`ChatWindow: Starting ${type} call with fixed ID:`, callId);
+    console.log(`ChatWindow: Starting ${type} call with ID:`, callId);
   };
 
   return (
@@ -94,7 +101,7 @@ export function ChatWindow() {
             size="icon" 
             onClick={() => startCall("audio")}
             aria-label={isCallActive && currentCallType === "audio" ? "End audio call" : "Start audio call"}
-            disabled={!currentUser && !(isCallActive && currentCallType === "audio")} // Allow ending if active, even if user logs out somehow mid-call
+            disabled={!currentUser && !(isCallActive && currentCallType === "audio")}
             className={(isCallActive && currentCallType === "audio") ? "text-destructive hover:text-destructive/90 hover:bg-destructive/10" : ""}
           >
             {isCallActive && currentCallType === "audio" ? <PhoneOff className="h-5 w-5" /> : <Phone className="h-5 w-5" />}
