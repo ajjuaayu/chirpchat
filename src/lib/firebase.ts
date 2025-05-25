@@ -3,12 +3,13 @@ import { getAuth, GoogleAuthProvider, Auth } from 'firebase/auth';
 import { getFirestore, Firestore } from 'firebase/firestore';
 
 const firebaseConfig = {
-  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY || "YOUR_API_KEY_PLACEHOLDER",
-  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN || "YOUR_AUTH_DOMAIN_PLACEHOLDER",
-  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || "YOUR_PROJECT_ID_PLACEHOLDER",
-  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET || "YOUR_STORAGE_BUCKET_PLACEHOLDER",
-  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID || "YOUR_MESSAGING_SENDER_ID_PLACEHOLDER",
-  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID || "YOUR_APP_ID_PLACEHOLDER",
+  apiKey: "AIzaSyDPhcCD1uXqNR_gQfC1E_WOxVnw2BMgaAw",
+  authDomain: "alltesting-2b8ff.firebaseapp.com",
+  projectId: "alltesting-2b8ff",
+  storageBucket: "alltesting-2b8ff.appspot.com", // Corrected common mistake from firebasestorage.app to appspot.com for storageBucket
+  messagingSenderId: "238857998191",
+  appId: "1:238857998191:web:0d81c7813c000a5017a29a",
+  measurementId: "G-6XWHK6MX0X"
 };
 
 let app: FirebaseApp;
