@@ -1,3 +1,4 @@
+
 "use client";
 
 import { UserAvatar } from "@/components/shared/UserAvatar";
@@ -14,34 +15,25 @@ export function ActiveUserList() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // In a real app, you'd use Firebase Realtime Database or Firestore presence
-    // For now, fetch users marked as active
     const usersRef = collection(firestore, "users");
-    const q = query(usersRef, where("isActive", "==", true)); // This assumes an `isActive` field
+    // Query for users explicitly marked as active.
+    // This requires an `isActive` field (boolean) in your user documents.
+    const q = query(usersRef, where("isActive", "==", true)); 
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const users: User[] = [];
       snapshot.forEach((doc) => {
-        users.push({ id: doc.id, ...doc.data() } as unknown as User); // Ensure proper type casting
+        // Ensure proper type casting and that an id is included
+        users.push({ uid: doc.id, ...doc.data() } as User); 
       });
       setActiveUsers(users);
       setLoading(false);
     }, (error) => {
       console.error("Error fetching active users:", error);
+      // Potentially set an error state here to inform the user
+      setActiveUsers([]); // Clear users on error
       setLoading(false);
     });
-    
-    // Placeholder users if Firebase is not fully set up or no users are active
-    if (usersRef === undefined) { // Basic check, ideally more robust
-       const placeholderUsers: User[] = [
-        { uid: '1', displayName: 'Alice Wonderland', email: 'alice@example.com', photoURL: 'https://placehold.co/100x100.png', isActive: true },
-        { uid: '2', displayName: 'Bob The Builder', email: 'bob@example.com', photoURL: 'https://placehold.co/100x100.png', isActive: true },
-        { uid: '3', displayName: 'Charlie Brown', email: 'charlie@example.com', photoURL: 'https://placehold.co/100x100.png', isActive: true },
-      ];
-      setActiveUsers(placeholderUsers);
-      setLoading(false);
-    }
-
 
     return () => unsubscribe();
   }, []);
@@ -65,7 +57,7 @@ export function ActiveUserList() {
           </div>
         )}
         {!loading && activeUsers.length === 0 && (
-          <p className="p-4 text-sm text-center text-sidebar-foreground/70">No active users.</p>
+          <p className="p-4 text-sm text-center text-sidebar-foreground/70">No active users currently online.</p>
         )}
         <ul className="space-y-1">
           {activeUsers.map((user) => (

@@ -22,14 +22,17 @@ export function VideoCallView({ onEndCall }: VideoCallViewProps) {
   const { toast } = useToast();
 
   useEffect(() => {
-    // This is a placeholder for WebRTC logic.
-    // In a real app, you would:
-    // 1. Get user media (camera and microphone)
-    // 2. Set up RTCPeerConnection
-    // 3. Handle signaling (e.g., with Firebase) to exchange SDP and ICE candidates
-    // 4. Attach local and remote streams to video elements
-
     const getCameraPermission = async () => {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        console.error('MediaDevices API not supported.');
+        setHasCameraPermission(false);
+        toast({
+          variant: 'destructive',
+          title: 'Media Not Supported',
+          description: 'Your browser does not support camera/microphone access.',
+        });
+        return;
+      }
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
         setHasCameraPermission(true);
@@ -41,10 +44,18 @@ export function VideoCallView({ onEndCall }: VideoCallViewProps) {
       } catch (error) {
         console.error('Error accessing camera/microphone:', error);
         setHasCameraPermission(false);
+        let description = 'Please enable camera and microphone permissions in your browser settings.';
+        if (error instanceof Error) {
+            if (error.name === 'NotAllowedError') {
+                description = 'Camera and microphone access was denied. Please enable it in your browser settings.';
+            } else if (error.name === 'NotFoundError') {
+                description = 'No camera or microphone found. Please ensure they are connected and enabled.';
+            }
+        }
         toast({
           variant: 'destructive',
           title: 'Media Access Denied',
-          description: 'Please enable camera and microphone permissions in your browser settings.',
+          description: description,
         });
       }
     };
@@ -56,38 +67,41 @@ export function VideoCallView({ onEndCall }: VideoCallViewProps) {
       if (localVideoRef.current && localVideoRef.current.srcObject) {
         const stream = localVideoRef.current.srcObject as MediaStream;
         stream.getTracks().forEach(track => track.stop());
+        localVideoRef.current.srcObject = null; // Clear the srcObject
       }
     };
   }, [toast]);
 
   const toggleMute = () => {
-    setIsMuted(!isMuted);
-    if (localVideoRef.current && localVideoRef.current.srcObject) {
-      const stream = localVideoRef.current.srcObject as MediaStream;
-      stream.getAudioTracks().forEach(track => track.enabled = isMuted); // isMuted is previous state here
-    }
-    // Add logic to signal mute state to remote peer
+    setIsMuted(prev => {
+      const newMutedState = !prev;
+      if (localVideoRef.current && localVideoRef.current.srcObject) {
+        const stream = localVideoRef.current.srcObject as MediaStream;
+        stream.getAudioTracks().forEach(track => track.enabled = !newMutedState);
+      }
+      return newMutedState;
+    });
   };
 
   const toggleCamera = () => {
-    setIsCameraOff(!isCameraOff);
-     if (localVideoRef.current && localVideoRef.current.srcObject) {
-      const stream = localVideoRef.current.srcObject as MediaStream;
-      stream.getVideoTracks().forEach(track => track.enabled = isCameraOff); // isCameraOff is previous state here
-    }
-    // Add logic to signal camera state to remote peer
+     setIsCameraOff(prev => {
+        const newCameraOffState = !prev;
+        if (localVideoRef.current && localVideoRef.current.srcObject) {
+            const stream = localVideoRef.current.srcObject as MediaStream;
+            stream.getVideoTracks().forEach(track => track.enabled = !newCameraOffState);
+        }
+        return newCameraOffState;
+    });
   };
 
   return (
     <div className="flex flex-col h-full p-4 bg-card items-center justify-center relative">
-      {/* This is a UI placeholder for a video call. WebRTC implementation is required. */}
-      
       {hasCameraPermission === false && (
-        <Alert variant="destructive" className="mb-4">
+        <Alert variant="destructive" className="mb-4 absolute top-4 left-4 right-4 z-10 max-w-md mx-auto">
           <AlertTitle>Camera & Microphone Access Required</AlertTitle>
           <AlertDescription>
             Please allow camera and microphone access to use video calling.
-            You might need to adjust your browser settings.
+            You might need to adjust your browser settings and refresh the page.
           </AlertDescription>
         </Alert>
       )}
@@ -95,7 +109,7 @@ export function VideoCallView({ onEndCall }: VideoCallViewProps) {
       <div className="grid grid-cols-1 md:grid-cols-5 gap-4 w-full h-full flex-1">
         {/* Remote Video - Main View */}
         <div className="md:col-span-4 bg-muted rounded-lg overflow-hidden flex items-center justify-center relative aspect-video md:aspect-auto">
-           {/* In a real app, remoteVideoRef would be used here */}
+          {/* In a real app, remoteVideoRef would be used here */}
           <Image 
             src="https://placehold.co/1280x720.png" 
             alt="Remote Video Placeholder" 
@@ -110,33 +124,56 @@ export function VideoCallView({ onEndCall }: VideoCallViewProps) {
         {/* Local Video - Picture-in-Picture style */}
         <div className="md:col-span-1 flex flex-col gap-4">
             <div className="bg-muted rounded-lg overflow-hidden aspect-video relative flex-shrink-0">
-              {hasCameraPermission ? (
-                <video ref={localVideoRef} className="w-full h-full object-cover" autoPlay muted playsInline />
-              ) : (
+              <video 
+                ref={localVideoRef} 
+                className="w-full h-full object-cover" 
+                autoPlay 
+                muted 
+                playsInline 
+                style={{ display: hasCameraPermission && !isCameraOff ? 'block' : 'none' }}
+              />
+              {(hasCameraPermission === null || hasCameraPermission === false || isCameraOff) && (
                  <Image 
                     src="https://placehold.co/640x480.png" 
                     alt="Local Video Placeholder" 
                     layout="fill"
                     objectFit="cover"
-                    className="bg-muted"
+                    className="bg-muted flex items-center justify-center"
                     data-ai-hint="webcam feed self"
                   />
+              )}
+               {isCameraOff && hasCameraPermission && (
+                <div className="absolute inset-0 flex items-center justify-center bg-black/50">
+                  <VideoOff className="h-12 w-12 text-white/70" />
+                </div>
               )}
               <p className="absolute bottom-2 left-2 bg-black/50 text-white px-1.5 py-0.5 rounded text-xs">You</p>
             </div>
             <div className="hidden md:block p-2 bg-muted/50 rounded-lg text-center text-sm text-foreground/70">
-              <p>Video call active. WebRTC logic would be here.</p>
+              <p>Video call active. Full WebRTC P2P connection is not implemented in this prototype.</p>
             </div>
         </div>
       </div>
 
       {/* Call Controls */}
-      <Card className="absolute bottom-4 left-1/2 transform -translate-x-1/2 shadow-xl">
+      <Card className="absolute bottom-4 left-1/2 transform -translate-x-1/2 shadow-xl bg-card/80 backdrop-blur-sm">
         <CardContent className="p-3 flex items-center gap-3">
-          <Button variant={isMuted ? "destructive" : "secondary"} size="icon" onClick={toggleMute} aria-label={isMuted ? "Unmute" : "Mute"}>
+          <Button 
+            variant={isMuted ? "destructive" : "secondary"} 
+            size="icon" 
+            onClick={toggleMute} 
+            aria-label={isMuted ? "Unmute" : "Mute"}
+            disabled={hasCameraPermission === false}
+          >
             {isMuted ? <MicOff className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
           </Button>
-          <Button variant={isCameraOff ? "destructive" : "secondary"} size="icon" onClick={toggleCamera} aria-label={isCameraOff ? "Turn camera on" : "Turn camera off"}>
+          <Button 
+            variant={isCameraOff ? "destructive" : "secondary"} 
+            size="icon" 
+            onClick={toggleCamera} 
+            aria-label={isCameraOff ? "Turn camera on" : "Turn camera off"}
+            disabled={hasCameraPermission === false}
+          >
             {isCameraOff ? <VideoOff className="h-5 w-5" /> : <Video className="h-5 w-5" />}
           </Button>
           <Button variant="destructive" size="icon" onClick={onEndCall} aria-label="End call">
