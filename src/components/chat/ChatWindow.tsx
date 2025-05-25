@@ -6,7 +6,7 @@ import { MessageInput } from "@/components/chat/MessageInput";
 import { UserAvatar } from "@/components/shared/UserAvatar";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/contexts/AuthContext";
-import { LogOut, Settings, Video, Copy, VideoOff } from "lucide-react"; 
+import { LogOut, Settings, Video, Copy, VideoOff, Phone, PhoneOff } from "lucide-react"; 
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -19,14 +19,16 @@ import { useState, useCallback } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { VideoCallView } from "./VideoCallView"; 
 
-// Fixed call ID for the general chat room to allow easy testing
 const GENERAL_CHAT_CALL_ID = "call_channel_general_chat";
+
+type CallType = "video" | "audio";
 
 export function ChatWindow() {
   const { currentUser, signOut } = useAuth();
   const { toast } = useToast();
-  const [isVideoCallActive, setIsVideoCallActive] = useState(false);
+  const [isCallActive, setIsCallActive] = useState(false);
   const [currentCallId, setCurrentCallId] = useState<string | null>(null);
+  const [currentCallType, setCurrentCallType] = useState<CallType | null>(null);
 
   const chatTargetName = "General Chat"; 
 
@@ -51,29 +53,32 @@ export function ChatWindow() {
   };
 
   const handleEndCall = useCallback(() => {
-    console.log("ChatWindow: handleEndCall triggered. Setting isVideoCallActive to false.");
-    setIsVideoCallActive(false);
+    console.log("ChatWindow: handleEndCall triggered. Setting isCallActive to false.");
+    setIsCallActive(false);
     setCurrentCallId(null);
-    // VideoCallView's useEffect cleanup will handle Firestore and WebRTC cleanup.
+    setCurrentCallType(null);
   }, []);
 
-  const toggleVideoCall = () => {
-    if (isVideoCallActive) {
-      // If call is active, onEndCall (which is handleEndCall here) will be triggered 
-      // by VideoCallView when its end call button is clicked, or when it unmounts.
-      // For an explicit stop from this button, we directly call handleEndCall.
+  const startCall = (type: CallType) => {
+    if (isCallActive) {
+      // If a call is already active, and the user clicks a call button,
+      // it should effectively be an "end call" action if it's for the current type,
+      // or potentially switch if we allowed that (not implemented).
+      // For simplicity, any call button click while a call is active ends the current call.
       handleEndCall();
-    } else {
-      if (!currentUser) {
-        toast({ variant: "destructive", title: "Login Required", description: "Please log in to start a video call."});
-        return;
-      }
-      // Use the fixed call ID for General Chat
-      const callId = GENERAL_CHAT_CALL_ID;
-      setCurrentCallId(callId);
-      setIsVideoCallActive(true);
-      console.log("ChatWindow: Starting/Joining video call with fixed ID:", callId);
+      if (type === currentCallType) return; // If ending the same type, don't restart
     }
+    
+    if (!currentUser) {
+      toast({ variant: "destructive", title: "Login Required", description: "Please log in to start a call."});
+      return;
+    }
+    
+    const callId = GENERAL_CHAT_CALL_ID; // Use the fixed call ID for General Chat
+    setCurrentCallId(callId);
+    setCurrentCallType(type);
+    setIsCallActive(true);
+    console.log(`ChatWindow: Starting ${type} call with fixed ID:`, callId);
   };
 
   return (
@@ -86,12 +91,24 @@ export function ChatWindow() {
           <Button 
             variant="ghost" 
             size="icon" 
-            onClick={toggleVideoCall} 
-            aria-label={isVideoCallActive ? "End video call" : "Start video call"}
-            disabled={!currentUser && !isVideoCallActive} 
+            onClick={() => startCall("audio")}
+            aria-label={isCallActive && currentCallType === "audio" ? "End audio call" : "Start audio call"}
+            disabled={!currentUser && !(isCallActive && currentCallType === "audio")}
+            className={(isCallActive && currentCallType === "audio") ? "text-destructive hover:text-destructive/90 hover:bg-destructive/10" : ""}
           >
-            {isVideoCallActive ? <VideoOff className="h-5 w-5 text-destructive" /> : <Video className="h-5 w-5" />}
+            {isCallActive && currentCallType === "audio" ? <PhoneOff className="h-5 w-5" /> : <Phone className="h-5 w-5" />}
           </Button>
+          <Button 
+            variant="ghost" 
+            size="icon" 
+            onClick={() => startCall("video")}
+            aria-label={isCallActive && currentCallType === "video" ? "End video call" : "Start video call"}
+            disabled={!currentUser && !(isCallActive && currentCallType === "video")}
+            className={(isCallActive && currentCallType === "video") ? "text-destructive hover:text-destructive/90 hover:bg-destructive/10" : ""}
+          >
+            {isCallActive && currentCallType === "video" ? <VideoOff className="h-5 w-5" /> : <Video className="h-5 w-5" />}
+          </Button>
+
           {currentUser && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -128,11 +145,12 @@ export function ChatWindow() {
         </div>
       </header>
       
-      {isVideoCallActive && currentCallId && currentUser ? (
+      {isCallActive && currentCallId && currentUser && currentCallType ? (
         <VideoCallView 
           callId={currentCallId} 
           onEndCall={handleEndCall} 
-          localUser={currentUser} 
+          localUser={currentUser}
+          isAudioOnly={currentCallType === "audio"}
         />
       ) : (
         <>
