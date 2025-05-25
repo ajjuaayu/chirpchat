@@ -15,9 +15,12 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { useState, useCallback } from "react"; // Added useCallback
+import { useState, useCallback } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { VideoCallView } from "./VideoCallView"; 
+
+// Fixed call ID for the general chat room to allow easy testing
+const GENERAL_CHAT_CALL_ID = "call_channel_general_chat";
 
 export function ChatWindow() {
   const { currentUser, signOut } = useAuth();
@@ -51,39 +54,25 @@ export function ChatWindow() {
     console.log("ChatWindow: handleEndCall triggered. Setting isVideoCallActive to false.");
     setIsVideoCallActive(false);
     setCurrentCallId(null);
-    // Any other cleanup from ChatWindow perspective
+    // VideoCallView's useEffect cleanup will handle Firestore and WebRTC cleanup.
   }, []);
 
   const toggleVideoCall = () => {
     if (isVideoCallActive) {
-      // If call is active, handleEndCall will be called by VideoCallView's end call button or internal logic.
-      // This direct call might be redundant or could be used as a forceful stop from ChatWindow.
-      // For now, let VideoCallView manage its own end via onEndCall prop.
-      // handleEndCall(); // Potentially redundant if VideoCallView calls onEndCall prop.
-      // Best to let the onEndCall prop from VideoCallView handle state changes.
-      // For an explicit stop from here, one might directly call cleanup logic in VideoCallView if accessible,
-      // or rely on onEndCall prop.
-      // Let's assume the VideoOff button here explicitly triggers handleEndCall flow.
-      if (currentCallId) {
-          // Manually trigger the end call flow which also updates Firestore if needed.
-          // This path is if the VideoOff button in ChatWindow header is clicked.
-          // The VideoCallView component itself has an end call button that also calls `onEndCall`.
-          handleEndCall(); 
-      } else {
-        // Fallback if currentCallId somehow got unset but UI thinks call is active.
-        setIsVideoCallActive(false); 
-      }
+      // If call is active, onEndCall (which is handleEndCall here) will be triggered 
+      // by VideoCallView when its end call button is clicked, or when it unmounts.
+      // For an explicit stop from this button, we directly call handleEndCall.
+      handleEndCall();
     } else {
       if (!currentUser) {
         toast({ variant: "destructive", title: "Login Required", description: "Please log in to start a video call."});
         return;
       }
-      // Using a fixed callId prefix + timestamp for pseudo-uniqueness.
-      // In a real app, this could be a more robust UUID or based on a chat room ID.
-      const callId = `call_${chatTargetName.replace(/\s+/g, '_')}_${Date.now()}`;
+      // Use the fixed call ID for General Chat
+      const callId = GENERAL_CHAT_CALL_ID;
       setCurrentCallId(callId);
       setIsVideoCallActive(true);
-      console.log("ChatWindow: Starting video call with ID:", callId);
+      console.log("ChatWindow: Starting/Joining video call with fixed ID:", callId);
     }
   };
 
@@ -99,7 +88,7 @@ export function ChatWindow() {
             size="icon" 
             onClick={toggleVideoCall} 
             aria-label={isVideoCallActive ? "End video call" : "Start video call"}
-            disabled={!currentUser && !isVideoCallActive} // Disable if not logged in and not in a call
+            disabled={!currentUser && !isVideoCallActive} 
           >
             {isVideoCallActive ? <VideoOff className="h-5 w-5 text-destructive" /> : <Video className="h-5 w-5" />}
           </Button>
