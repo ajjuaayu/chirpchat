@@ -15,7 +15,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { useState } from "react";
+import { useState, useCallback } from "react"; // Added useCallback
 import { useToast } from "@/hooks/use-toast";
 import { VideoCallView } from "./VideoCallView"; 
 
@@ -25,7 +25,6 @@ export function ChatWindow() {
   const [isVideoCallActive, setIsVideoCallActive] = useState(false);
   const [currentCallId, setCurrentCallId] = useState<string | null>(null);
 
-  // Placeholder for current chat partner or group name
   const chatTargetName = "General Chat"; 
 
   const handleShareAppLink = () => {
@@ -48,17 +47,43 @@ export function ChatWindow() {
     }
   };
 
+  const handleEndCall = useCallback(() => {
+    console.log("ChatWindow: handleEndCall triggered. Setting isVideoCallActive to false.");
+    setIsVideoCallActive(false);
+    setCurrentCallId(null);
+    // Any other cleanup from ChatWindow perspective
+  }, []);
+
   const toggleVideoCall = () => {
     if (isVideoCallActive) {
-      setIsVideoCallActive(false);
-      setCurrentCallId(null);
-      // Any cleanup related to ending the call from the ChatWindow perspective
+      // If call is active, handleEndCall will be called by VideoCallView's end call button or internal logic.
+      // This direct call might be redundant or could be used as a forceful stop from ChatWindow.
+      // For now, let VideoCallView manage its own end via onEndCall prop.
+      // handleEndCall(); // Potentially redundant if VideoCallView calls onEndCall prop.
+      // Best to let the onEndCall prop from VideoCallView handle state changes.
+      // For an explicit stop from here, one might directly call cleanup logic in VideoCallView if accessible,
+      // or rely on onEndCall prop.
+      // Let's assume the VideoOff button here explicitly triggers handleEndCall flow.
+      if (currentCallId) {
+          // Manually trigger the end call flow which also updates Firestore if needed.
+          // This path is if the VideoOff button in ChatWindow header is clicked.
+          // The VideoCallView component itself has an end call button that also calls `onEndCall`.
+          handleEndCall(); 
+      } else {
+        // Fallback if currentCallId somehow got unset but UI thinks call is active.
+        setIsVideoCallActive(false); 
+      }
     } else {
-      // For simplicity, using a fixed callId. In a real app, this would be dynamic,
-      // potentially based on the chat room or generated for a new 1-to-1 call.
+      if (!currentUser) {
+        toast({ variant: "destructive", title: "Login Required", description: "Please log in to start a video call."});
+        return;
+      }
+      // Using a fixed callId prefix + timestamp for pseudo-uniqueness.
+      // In a real app, this could be a more robust UUID or based on a chat room ID.
       const callId = `call_${chatTargetName.replace(/\s+/g, '_')}_${Date.now()}`;
       setCurrentCallId(callId);
       setIsVideoCallActive(true);
+      console.log("ChatWindow: Starting video call with ID:", callId);
     }
   };
 
@@ -66,12 +91,17 @@ export function ChatWindow() {
     <div className="flex flex-col h-full bg-background shadow-inner">
       <header className="flex items-center justify-between p-4 border-b border-border bg-card shadow-sm">
         <div className="flex items-center gap-3">
-          {/* <UserAvatar user={null} className="h-10 w-10" />  */}
           <h2 className="text-xl font-semibold text-foreground">{chatTargetName}</h2>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="ghost" size="icon" onClick={toggleVideoCall} aria-label={isVideoCallActive ? "End video call" : "Start video call"}>
-            {isVideoCallActive ? <VideoOff className="h-5 w-5" /> : <Video className="h-5 w-5" />}
+          <Button 
+            variant="ghost" 
+            size="icon" 
+            onClick={toggleVideoCall} 
+            aria-label={isVideoCallActive ? "End video call" : "Start video call"}
+            disabled={!currentUser && !isVideoCallActive} // Disable if not logged in and not in a call
+          >
+            {isVideoCallActive ? <VideoOff className="h-5 w-5 text-destructive" /> : <Video className="h-5 w-5" />}
           </Button>
           {currentUser && (
             <DropdownMenu>
@@ -109,8 +139,12 @@ export function ChatWindow() {
         </div>
       </header>
       
-      {isVideoCallActive && currentCallId ? (
-        <VideoCallView callId={currentCallId} onEndCall={toggleVideoCall} />
+      {isVideoCallActive && currentCallId && currentUser ? (
+        <VideoCallView 
+          callId={currentCallId} 
+          onEndCall={handleEndCall} 
+          localUser={currentUser} 
+        />
       ) : (
         <>
           <MessageList />
