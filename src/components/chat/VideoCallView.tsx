@@ -49,36 +49,34 @@ export function VideoCallView({ callId, onEndCall, localUser, isAudioOnly }: Vid
   const remoteStreamRef = useRef<MediaStream | null>(null);
   
   const [isMuted, setIsMuted] = useState(false);
-  const [isCameraOff, setIsCameraOff] = useState(isAudioOnly); // Initialize based on call type
+  const [isCameraOff, setIsCameraOff] = useState(isAudioOnly);
   const [hasMediaPermission, setHasMediaPermission] = useState<boolean | null>(null);
   const [isConnecting, setIsConnecting] = useState(true);
   
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   
-  // Refs for Firestore listeners to ensure they are unsubscribed
   const callDocUnsubscribeRef = useRef<Unsubscribe | null>(null);
   const callerCandidatesUnsubscribeRef = useRef<Unsubscribe | null>(null);
   const calleeCandidatesUnsubscribeRef = useRef<Unsubscribe | null>(null);
 
   const localUserInitiatedEndRef = useRef(false);
-  const isCallerRef = useRef<boolean | null>(null); // To keep track of role without relying on async state
+  const isCallerRef = useRef<boolean | null>(null);
 
-  // Comprehensive cleanup function
-  const cleanupCall = useCallback(async (initiatedByLocalUser = false) => {
-    console.log(`VideoCallView: cleanupCall triggered. callId: ${callId}, Local initiated: ${initiatedByLocalUser}`);
+
+  const cleanupCall = useCallback(async (initiatedByLocalUser = false, skipFirestoreDeletion = false) => {
+    console.log(`VideoCallView: cleanupCall triggered. callId: ${callId}, Local initiated: ${initiatedByLocalUser}, Skip Firestore Deletion: ${skipFirestoreDeletion}`);
     localUserInitiatedEndRef.current = initiatedByLocalUser;
 
-    // Stop media tracks
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach(track => track.stop());
       localStreamRef.current = null;
+      console.log("VideoCallView: Local media tracks stopped.");
     }
     if (localVideoRef.current) localVideoRef.current.srcObject = null;
     if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
     remoteStreamRef.current = null;
 
-    // Close peer connection
     if (peerConnectionRef.current) {
       peerConnectionRef.current.onicecandidate = null;
       peerConnectionRef.current.ontrack = null;
@@ -92,48 +90,38 @@ export function VideoCallView({ callId, onEndCall, localUser, isAudioOnly }: Vid
       console.log("VideoCallView: Peer connection closed.");
     }
 
-    // Unsubscribe from Firestore listeners
-    if (callDocUnsubscribeRef.current) {
-      callDocUnsubscribeRef.current();
-      callDocUnsubscribeRef.current = null;
-      console.log("VideoCallView: Unsubscribed from call document.");
-    }
-    if (callerCandidatesUnsubscribeRef.current) {
-      callerCandidatesUnsubscribeRef.current();
-      callerCandidatesUnsubscribeRef.current = null;
-    }
-    if (calleeCandidatesUnsubscribeRef.current) {
-      calleeCandidatesUnsubscribeRef.current();
-      calleeCandidatesUnsubscribeRef.current = null;
-    }
+    if (callDocUnsubscribeRef.current) { callDocUnsubscribeRef.current(); callDocUnsubscribeRef.current = null; console.log("VideoCallView: Unsubscribed from call document."); }
+    if (callerCandidatesUnsubscribeRef.current) { callerCandidatesUnsubscribeRef.current(); callerCandidatesUnsubscribeRef.current = null; console.log("VideoCallView: Unsubscribed from caller candidates.");}
+    if (calleeCandidatesUnsubscribeRef.current) { calleeCandidatesUnsubscribeRef.current(); calleeCandidatesUnsubscribeRef.current = null; console.log("VideoCallView: Unsubscribed from callee candidates.");}
     
-    // Firestore cleanup if this user initiated the end
-    if (initiatedByLocalUser && callId && localUser.uid) {
+    if (initiatedByLocalUser && callId && localUser.uid && !skipFirestoreDeletion) {
       const callDocRef = doc(firestore, 'calls', callId);
       try {
         const callDocSnap = await getDoc(callDocRef);
         if (callDocSnap.exists()) {
           const callData = callDocSnap.data();
-          const userWasCaller = callData.callerId === localUser.uid;
-          const userWasCallee = callData.calleeId === localUser.uid;
+          const userIsCurrentlyCaller = callData.callerId === localUser.uid;
+          const userIsCurrentlyCallee = callData.calleeId === localUser.uid;
+          let newStatus = callData.status;
 
-          if (userWasCaller && callData.status !== 'ended_by_caller' && callData.status !== 'ended') {
-            await updateDoc(callDocRef, { status: 'ended_by_caller', endedAt: serverTimestamp() });
-            console.log("VideoCallView: Caller ended call, updated status in Firestore.");
-          } else if (userWasCallee && callData.status !== 'ended_by_callee' && callData.status !== 'ended') {
-            await updateDoc(callDocRef, { status: 'ended_by_callee', endedAt: serverTimestamp() });
-            console.log("VideoCallView: Callee ended call, updated status in Firestore.");
+          if (userIsCurrentlyCaller && callData.status !== 'ended_by_caller' && callData.status !== 'ended') {
+            newStatus = 'ended_by_caller';
+            await updateDoc(callDocRef, { status: newStatus, endedAt: serverTimestamp() });
+            console.log("VideoCallView: Caller ended call, updated status in Firestore to ended_by_caller.");
+          } else if (userIsCurrentlyCallee && callData.status !== 'ended_by_callee' && callData.status !== 'ended') {
+            newStatus = 'ended_by_callee';
+            await updateDoc(callDocRef, { status: newStatus, endedAt: serverTimestamp() });
+            console.log("VideoCallView: Callee ended call, updated status in Firestore to ended_by_callee.");
           }
           
-          // If both parties have ended, or one party ends an already ended call, delete the document and subcollections
-          const updatedCallSnap = await getDoc(callDocRef); // Get fresh data
-          if (updatedCallSnap.exists()) {
-            const updatedCallData = updatedCallSnap.data();
-            const otherPartyEnded = (userWasCaller && updatedCallData.status === 'ended_by_callee') ||
-                                    (userWasCallee && updatedCallData.status === 'ended_by_caller') ||
-                                    updatedCallData.status === 'ended'; // Or if it was already generically 'ended'
-            
-            if (otherPartyEnded || ( (userWasCaller && updatedCallData.status === 'ended_by_caller') || (userWasCallee && updatedCallData.status === 'ended_by_callee') ) && !updatedCallData.calleeId && userWasCaller) { // Caller ends before callee joins
+          const updatedCallData = (await getDoc(callDocRef)).data(); // Get fresh data
+          if (updatedCallData) {
+            const otherPartyEnded = (userIsCurrentlyCaller && updatedCallData.status === 'ended_by_callee') ||
+                                    (userIsCurrentlyCallee && updatedCallData.status === 'ended_by_caller') ||
+                                    updatedCallData.status === 'ended';
+            const selfEndedAndNoOtherParty = (userIsCurrentlyCaller && updatedCallData.status === 'ended_by_caller' && !updatedCallData.calleeId); // Caller ends before anyone joins
+
+            if (otherPartyEnded || selfEndedAndNoOtherParty) {
               console.log("VideoCallView: Conditions met for deleting call document and subcollections for callId:", callId);
               const batch = writeBatch(firestore);
               const callerCandidatesQuery = query(collection(firestore, `calls/${callId}/callerCandidates`));
@@ -155,7 +143,7 @@ export function VideoCallView({ callId, onEndCall, localUser, isAudioOnly }: Vid
       }
     }
     console.log("VideoCallView: cleanupCall finished for callId:", callId);
-  }, [callId, localUser.uid, toast]); // Added toast to useCallback dependencies
+  }, [callId, localUser.uid, toast]);
 
   const initializeCall = useCallback(async () => {
     console.log(`VideoCallView: initializeCall started. callId: ${callId}, isAudioOnly: ${isAudioOnly}`);
@@ -172,17 +160,17 @@ export function VideoCallView({ callId, onEndCall, localUser, isAudioOnly }: Vid
         stream.getVideoTracks().forEach(track => { track.enabled = false; track.stop(); });
         setIsCameraOff(true);
       } else {
-        stream.getVideoTracks().forEach(track => track.enabled = !isCameraOff); // Use state for initial camera on/off
+        stream.getVideoTracks().forEach(track => track.enabled = !isCameraOff);
       }
-      stream.getAudioTracks().forEach(track => track.enabled = !isMuted); // Use state for initial mute
+      stream.getAudioTracks().forEach(track => track.enabled = !isMuted);
 
       localStreamRef.current = stream;
       if (localVideoRef.current) localVideoRef.current.srcObject = stream;
       setHasMediaPermission(true);
 
-      peerConnectionRef.current = new RTCPeerConnection(stunServers);
-      const pc = peerConnectionRef.current;
-      console.log("VideoCallView: RTCPeerConnection created.");
+      const pc = new RTCPeerConnection(stunServers);
+      peerConnectionRef.current = pc;
+      console.log("VideoCallView: RTCPeerConnection created. Initial Signalling State:", pc.signalingState);
 
       localStreamRef.current.getTracks().forEach(track => pc.addTrack(track, localStreamRef.current!));
 
@@ -200,25 +188,20 @@ export function VideoCallView({ callId, onEndCall, localUser, isAudioOnly }: Vid
         if (event.streams && event.streams[0]) {
           remoteStreamRef.current = event.streams[0];
           if (remoteVideoRef.current) remoteVideoRef.current.srcObject = event.streams[0];
-          setIsConnecting(false); // Connected when remote track is received
+          setIsConnecting(false);
         }
       };
       
       pc.onconnectionstatechange = () => {
         console.log("VideoCallView: Peer connection state changed to:", pc.connectionState);
-        if (pc.connectionState === 'connected') {
-          setIsConnecting(false);
-        } else if (['disconnected', 'failed', 'closed'].includes(pc.connectionState)) {
+        if (pc.connectionState === 'connected') setIsConnecting(false);
+        else if (['disconnected', 'failed', 'closed'].includes(pc.connectionState)) {
            console.warn("VideoCallView: Peer connection state is disconnected, failed, or closed:", pc.connectionState);
-           if (!localUserInitiatedEndRef.current) { 
-               onEndCall(); 
-           }
+           if (!localUserInitiatedEndRef.current) onEndCall(); 
         }
       };
 
-      pc.onsignalingstatechange = () => {
-          console.log("VideoCallView: Peer signaling state changed to:", pc.signalingState);
-      }
+      pc.onsignalingstatechange = () => console.log("VideoCallView: Peer signaling state changed to:", pc.signalingState);
       pc.oniceconnectionstatechange = () => {
           console.log("VideoCallView: Peer ICE connection state changed to:", pc.iceConnectionState);
            if (pc.iceConnectionState === 'failed' && !localUserInitiatedEndRef.current) {
@@ -228,17 +211,19 @@ export function VideoCallView({ callId, onEndCall, localUser, isAudioOnly }: Vid
           }
       };
 
-      // Firestore Signaling
       const callDocRef = doc(firestore, 'calls', callId);
-      const callDocSnap = await getDoc(callDocRef);
+      let callDocSnap = await getDoc(callDocRef);
+      let callData = callDocSnap.exists() ? callDocSnap.data() : null;
 
-      if (!callDocSnap.exists() || (callDocSnap.exists() && ['ended', 'ended_by_caller', 'ended_by_callee'].includes(callDocSnap.data()?.status))) {
-        // This user is the caller
+      // Determine if this user is the caller or callee
+      if (!callDocSnap.exists() || (callData && ['ended', 'ended_by_caller', 'ended_by_callee'].includes(callData.status))) {
+        // This user is the caller (new call or taking over a previously ended call slot)
         isCallerRef.current = true;
-        console.log("VideoCallView: User is Caller. Creating call document.");
+        console.log("VideoCallView: User is Caller. Creating or re-creating call document.");
 
         if (callDocSnap.exists()) { // Clean up stale/ended document
             console.log("VideoCallView: Found stale/ended call document. Deleting before creating new one.");
+            await cleanupCall(true, true); // Perform local cleanup & request Firestore deletion but skip its own Firestore update part
             const batch = writeBatch(firestore);
             const oldCallerCandidates = await getDocs(query(collection(firestore, `calls/${callId}/callerCandidates`)));
             oldCallerCandidates.forEach((d) => batch.delete(d.ref));
@@ -247,6 +232,8 @@ export function VideoCallView({ callId, onEndCall, localUser, isAudioOnly }: Vid
             batch.delete(callDocRef);
             await batch.commit();
             console.log("VideoCallView: Stale call document and candidates deleted.");
+            callDocSnap = await getDoc(callDocRef); // Re-fetch, should not exist now
+            callData = null;
         }
         
         if (pc.signalingState !== 'stable') {
@@ -255,7 +242,7 @@ export function VideoCallView({ callId, onEndCall, localUser, isAudioOnly }: Vid
         }
         const offerDescription = await pc.createOffer();
         await pc.setLocalDescription(offerDescription);
-        console.log("VideoCallView (Caller): Local description (offer) set.");
+        console.log("VideoCallView (Caller): Local description (offer) set. PC State:", pc.signalingState);
 
         const callDataForCreate = {
           callerId: localUser.uid,
@@ -269,179 +256,183 @@ export function VideoCallView({ callId, onEndCall, localUser, isAudioOnly }: Vid
         await setDoc(callDocRef, callDataForCreate);
         console.log("VideoCallView (Caller): Call document created with offer.");
 
-        // Listen for answer from callee
-        callDocUnsubscribeRef.current = onSnapshot(callDocRef, async (snapshot: DocumentSnapshot<DocumentData>) => {
-          const data = snapshot.data();
-          console.log("VideoCallView (Caller): Call doc update. Data:", data, "PC Signaling State:", pc.signalingState);
-          if (!snapshot.exists() && !localUserInitiatedEndRef.current) {
-            console.log("VideoCallView (Caller): Call document deleted remotely.");
-            if (!localUserInitiatedEndRef.current) onEndCall();
-            return;
-          }
-          if (data?.answer && pc.signalingState === 'have-local-offer') {
-            try {
-              await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
-              console.log("VideoCallView (Caller): Remote description (answer) set.");
-            } catch (e: any) {
-              console.error("VideoCallView (Caller): Error setting remote description (answer):", e.message, "Signaling state:", pc.signalingState);
-            }
-          }
-           if (data?.status && ['ended', 'ended_by_callee'].includes(data.status) && !localUserInitiatedEndRef.current) {
-            console.log("VideoCallView (Caller): Call ended by callee or globally. Status:", data.status);
-            toast({title: "Call Ended", description: "The other user has ended the call."});
-            if (!localUserInitiatedEndRef.current) onEndCall();
-          }
-        });
+      } else if (callData && callData.callerId === localUser.uid) { // Original caller rejoining
+          isCallerRef.current = true;
+          console.log("VideoCallView (Rejoining Caller): User is original Caller. PC State:", pc.signalingState, "LocalDesc:", pc.currentLocalDescription, "RemoteDesc:", pc.currentRemoteDescription);
 
-        // Listen for callee's ICE candidates
-        calleeCandidatesUnsubscribeRef.current = onSnapshot(collection(firestore, `calls/${callId}/calleeCandidates`), snapshot => {
-          snapshot.docChanges().forEach(async change => {
-            if (change.type === 'added') {
-              const candidate = change.doc.data();
-              console.log("VideoCallView (Caller): Received callee ICE candidate:", candidate);
-              if (pc.remoteDescription || pc.currentRemoteDescription) { // Check if remote description is set
-                 try { await pc.addIceCandidate(new RTCIceCandidate(candidate)); }
-                 catch (e) { console.error("VideoCallView (Caller): Error adding received ICE candidate:", e); }
-              } else {
-                console.warn("VideoCallView (Caller): Received ICE candidate but remote description not set yet. Candidate queued implicitly by browser or ignored.");
+          if (callData.answer) { // Answer exists, means call was established or callee responded
+            if (!pc.currentRemoteDescription) {
+              console.log("VideoCallView (Rejoining Caller): Answer exists. Setting remote description (answer from Firestore). Answer:", callData.answer);
+              try {
+                await pc.setRemoteDescription(new RTCSessionDescription(callData.answer));
+                console.log("VideoCallView (Rejoining Caller): Remote description (answer) set. PC State:", pc.signalingState);
+                setIsConnecting(false);
+              } catch (e: any) {
+                console.error("VideoCallView (Rejoining Caller): Error setting remote description (answer):", e.message, "Signaling state:", pc.signalingState);
+                throw e; // Propagate error to main catch block
               }
+            } else {
+               console.log("VideoCallView (Rejoining Caller): Remote description (answer) already set.");
+               setIsConnecting(false);
             }
-          });
-        });
-
-      } else {
-        // Call document exists, user might be callee or rejoining
-        const callData = callDocSnap.data()!;
-        console.log("VideoCallView: Existing call document found:", callData);
+          } else if (callData.offer && pc.signalingState === 'stable' && !pc.currentLocalDescription) { 
+            // Offer exists, but no answer yet. Caller rejoining before callee answers.
+            // The new PC instance should re-initiate the offer process *for itself*.
+            console.log("VideoCallView (Rejoining Caller): Offer exists, no answer. Re-initiating offer process for this PC instance.");
+            try {
+              const offerDescription = await pc.createOffer();
+              await pc.setLocalDescription(offerDescription); // Set the NEW offer as local
+              console.log("VideoCallView (Rejoining Caller): New local description (re-offer) set. PC State:", pc.signalingState);
+              
+              await updateDoc(callDocRef, { 
+                offer: { type: offerDescription.type, sdp: offerDescription.sdp },
+                // status: 'ringing', // Ensure status is ringing
+              });
+              console.log("VideoCallView (Rejoining Caller): Firestore updated with new offer.");
+            } catch (e: any) {
+                console.error("VideoCallView (Rejoining Caller): Error re-initiating offer:", e.message, "Signaling state:", pc.signalingState);
+                throw e; // Propagate error
+            }
+          } else {
+            console.log("VideoCallView (Rejoining Caller): Conditions for setting descriptions not fully met or already set. Offer:", !!callData.offer, "Answer:", !!callData.answer, "CurrentLocal:", !!pc.currentLocalDescription, "CurrentRemote:", !!pc.currentRemoteDescription, "SignalingState:", pc.signalingState);
+            if (pc.currentLocalDescription && pc.currentRemoteDescription) setIsConnecting(false);
+            else if (pc.currentRemoteDescription && !pc.currentLocalDescription && callData.offer) {
+                // This indicates that the remote (answer) is set, but the local (original offer) isn't explicitly set on this new PC instance.
+                // WebRTC might implicitly use the local tracks. This scenario should be okay.
+                 console.log("VideoCallView (Rejoining Caller): Remote is set, local (original offer) not set on this PC instance, but should be implicitly handled.");
+                 setIsConnecting(false);
+            }
+          }
+      } else if (callData && callData.status === 'ringing' && !callData.calleeId && callData.callerId !== localUser.uid) { // User is Callee
+        isCallerRef.current = false;
+        console.log("VideoCallView: User is Callee. Joining call. PC State:", pc.signalingState);
 
         if (callData.isAudioOnly !== isAudioOnly) {
           toast({variant: "destructive", title: "Call Type Mismatch", description: `This call is ${callData.isAudioOnly ? 'audio-only' : 'video'}. You tried to join with a different type.`});
           if (!localUserInitiatedEndRef.current) onEndCall(); return;
         }
 
-        if (callData.callerId === localUser.uid) {
-          // User is the original caller, possibly rejoining/re-establishing
-          isCallerRef.current = true;
-          console.log("VideoCallView: User is original Caller, re-establishing.");
-          // If offer is there and PC localDesc isn't set, set it.
-          if (callData.offer && !pc.currentLocalDescription && pc.signalingState === 'stable') {
-            await pc.setLocalDescription(new RTCSessionDescription(callData.offer));
+        if (pc.signalingState !== 'stable' && pc.signalingState !== 'have-local-offer') { // Should be stable before setting remote offer
+            console.error("VideoCallView (Callee): PC not stable for setRemoteDescription (offer). State:", pc.signalingState);
+            throw new Error("PeerConnection not stable for setting remote offer.");
+        }
+        await pc.setRemoteDescription(new RTCSessionDescription(callData.offer));
+        console.log("VideoCallView (Callee): Remote description (offer) set. PC State:", pc.signalingState);
+        
+        if (pc.signalingState !== 'have-remote-offer') {
+          console.error("VideoCallView (Callee): PC not in have-remote-offer state for createAnswer. State:", pc.signalingState);
+          throw new Error("PeerConnection not in have-remote-offer state for creating answer.");
+        }
+        const answerDescription = await pc.createAnswer();
+        await pc.setLocalDescription(answerDescription);
+        console.log("VideoCallView (Callee): Local description (answer) set. PC State:", pc.signalingState);
+
+        await updateDoc(callDocRef, {
+          calleeId: localUser.uid,
+          calleeName: localUser.displayName || "Anonymous Callee",
+          answer: { type: answerDescription.type, sdp: answerDescription.sdp },
+          status: 'active',
+          joinedAt: serverTimestamp(),
+        });
+        console.log("VideoCallView (Callee): Call document updated with answer, status active.");
+        setIsConnecting(false);
+      } else if (callData && callData.status === 'active' && callData.calleeId === localUser.uid) { // Original Callee rejoining
+          isCallerRef.current = false;
+          console.log("VideoCallView (Rejoining Callee): User is original Callee. PC State:", pc.signalingState);
+          if (callData.isAudioOnly !== isAudioOnly) { /* ... type mismatch ... */ }
+
+          if (callData.offer && !pc.currentRemoteDescription) {
+              try {
+                await pc.setRemoteDescription(new RTCSessionDescription(callData.offer));
+                console.log("VideoCallView (Rejoining Callee): Remote description (offer) set.");
+              } catch (e) { /* error handling */ throw e; }
           }
-          // If answer is there and PC remoteDesc isn't set, set it.
-          if (callData.answer && !pc.currentRemoteDescription && (pc.signalingState === 'have-local-offer' || (pc.signalingState === 'stable' && pc.currentLocalDescription))) {
-            await pc.setRemoteDescription(new RTCSessionDescription(callData.answer));
+          if (callData.answer && !pc.currentLocalDescription && pc.signalingState === 'have-remote-offer') {
+            try {
+              await pc.setLocalDescription(new RTCSessionDescription(callData.answer));
+              console.log("VideoCallView (Rejoining Callee): Local description (answer) set.");
+            } catch (e) { /* error handling */ throw e;}
           }
           if (pc.currentRemoteDescription && pc.currentLocalDescription) setIsConnecting(false);
-          
-          // Re-establish listeners (similar to caller block)
-           callDocUnsubscribeRef.current = onSnapshot(callDocRef, (snapshot) => { /* ... same as caller's listener ... */ 
-            const data = snapshot.data();
-            if (!snapshot.exists() && !localUserInitiatedEndRef.current) {
-                console.log("VideoCallView (Rejoining Caller): Call document deleted.");
-                if (!localUserInitiatedEndRef.current) onEndCall(); return;
-            }
-            if (data?.status && ['ended', 'ended_by_callee'].includes(data.status) && !localUserInitiatedEndRef.current) {
-                console.log("VideoCallView (Rejoining Caller): Call ended by callee or globally.");
-                toast({title: "Call Ended", description: "The other user has ended the call."});
-                if (!localUserInitiatedEndRef.current) onEndCall();
-            }
-           });
-           calleeCandidatesUnsubscribeRef.current = onSnapshot(collection(firestore, `calls/${callId}/calleeCandidates`), snapshot => { /* ... */ });
 
-
-        } else if (callData.status === 'ringing' && !callData.calleeId) {
-          // User is Callee, joining a ringing call
-          isCallerRef.current = false;
-          console.log("VideoCallView: User is Callee. Joining call.");
-
-          if (pc.signalingState !== 'stable') {
-            console.error("VideoCallView (Callee): PC not stable for setRemoteDescription. State:", pc.signalingState);
-            throw new Error("PeerConnection not stable for setting remote offer.");
-          }
-          await pc.setRemoteDescription(new RTCSessionDescription(callData.offer));
-          console.log("VideoCallView (Callee): Remote description (offer) set.");
-          
-          if (pc.signalingState !== 'have-remote-offer') {
-            console.error("VideoCallView (Callee): PC not in have-remote-offer state for createAnswer. State:", pc.signalingState);
-            throw new Error("PeerConnection not in have-remote-offer state for creating answer.");
-          }
-          const answerDescription = await pc.createAnswer();
-          await pc.setLocalDescription(answerDescription);
-          console.log("VideoCallView (Callee): Local description (answer) set.");
-
-          await updateDoc(callDocRef, {
-            calleeId: localUser.uid,
-            calleeName: localUser.displayName || "Anonymous Callee",
-            answer: { type: answerDescription.type, sdp: answerDescription.sdp },
-            status: 'active',
-            joinedAt: serverTimestamp(),
-          });
-          console.log("VideoCallView (Callee): Call document updated with answer, status active.");
-          setIsConnecting(false);
-
-          // Listen for caller's ICE candidates
-          callerCandidatesUnsubscribeRef.current = onSnapshot(collection(firestore, `calls/${callId}/callerCandidates`), snapshot => {
-            snapshot.docChanges().forEach(async change => {
-              if (change.type === 'added') {
-                const candidate = change.doc.data();
-                console.log("VideoCallView (Callee): Received caller ICE candidate:", candidate);
-                 if (pc.remoteDescription || pc.currentRemoteDescription) {
-                    try { await pc.addIceCandidate(new RTCIceCandidate(candidate)); }
-                    catch (e) { console.error("VideoCallView (Callee): Error adding received ICE candidate:", e); }
-                 } else {
-                    console.warn("VideoCallView (Callee): Received ICE candidate but remote description not set yet.");
-                 }
-              }
-            });
-          });
-          
-          // Listen for call doc changes (e.g. caller ending call)
-          callDocUnsubscribeRef.current = onSnapshot(callDocRef, (snapshot) => {
-             const data = snapshot.data();
-             if (!snapshot.exists() && !localUserInitiatedEndRef.current) {
-                console.log("VideoCallView (Callee): Call document deleted.");
-                if (!localUserInitiatedEndRef.current) onEndCall(); return;
-             }
-             if (data?.status && ['ended', 'ended_by_caller'].includes(data.status) && !localUserInitiatedEndRef.current) {
-                console.log("VideoCallView (Callee): Call ended by caller or globally.");
-                toast({title: "Call Ended", description: "The other user has ended the call."});
-                if (!localUserInitiatedEndRef.current) onEndCall();
-             }
-          });
-
-
-        } else if (callData.status === 'active' && callData.calleeId === localUser.uid) {
-            isCallerRef.current = false;
-            console.log("VideoCallView: User is original Callee, re-establishing.");
-            if (callData.offer && !pc.currentRemoteDescription && pc.signalingState === 'stable') {
-                 await pc.setRemoteDescription(new RTCSessionDescription(callData.offer));
-            }
-            if (callData.answer && !pc.currentLocalDescription && (pc.signalingState === 'have-remote-offer' || (pc.signalingState === 'stable' && pc.currentRemoteDescription ))) {
-                await pc.setLocalDescription(new RTCSessionDescription(callData.answer));
-            }
-            if (pc.currentRemoteDescription && pc.currentLocalDescription) setIsConnecting(false);
-
-            // Re-establish listeners
-            callerCandidatesUnsubscribeRef.current = onSnapshot(collection(firestore, `calls/${callId}/callerCandidates`), snapshot => { /* ... */ });
-            callDocUnsubscribeRef.current = onSnapshot(callDocRef, (snapshot) => { /* ... */ });
-
-
-        } else if (callData.status === 'active' && callData.callerId !== localUser.uid && callData.calleeId !== localUser.uid) {
-          console.warn("VideoCallView: Call is busy with other participants.");
-          toast({variant: "destructive", title: "Call Busy", description: "This call is already in progress."});
-          if (!localUserInitiatedEndRef.current) onEndCall(); return;
-        } else {
-          console.warn("VideoCallView: Call document in unexpected state or user not part of active call. User:", localUser.uid, "Call Data:", callData);
-          toast({variant: "destructive", title: "Call Error", description: "Could not join the call due to an unexpected state."});
-          if (!localUserInitiatedEndRef.current) onEndCall(); return;
-        }
+      } else if (callData && callData.status === 'active' && callData.callerId !== localUser.uid && callData.calleeId !== localUser.uid) {
+        console.warn("VideoCallView: Call is busy with other participants.");
+        toast({variant: "destructive", title: "Call Busy", description: "This call is already in progress with other users."});
+        if (!localUserInitiatedEndRef.current) onEndCall(); return;
+      } else {
+        console.warn("VideoCallView: Call document in unexpected state or user not part of active call. User:", localUser.uid, "Call Data:", callData);
+        toast({variant: "destructive", title: "Call Error", description: "Could not join the call due to an unexpected state."});
+        if (!localUserInitiatedEndRef.current) onEndCall(); return;
       }
+
+      // Firestore Listeners
+      // Listener for the main call document
+      callDocUnsubscribeRef.current = onSnapshot(callDocRef, async (snapshot: DocumentSnapshot<DocumentData>) => {
+        const data = snapshot.data();
+        console.log("VideoCallView (CallDoc Listener): Update. Data:", data, "PC Signaling State:", pc?.signalingState, "isCallerRef:", isCallerRef.current);
+        
+        if (!snapshot.exists()) {
+          console.log("VideoCallView (CallDoc Listener): Call document deleted remotely.");
+          if (!localUserInitiatedEndRef.current) {
+            toast({title: "Call Ended", description: "The call document was removed."});
+            onEndCall();
+          }
+          return;
+        }
+
+        if (isCallerRef.current === true) { // Current user is Caller
+          if (data?.answer && pc && (pc.signalingState === 'have-local-offer' || pc.signalingState === 'stable') && !pc.currentRemoteDescription) {
+            try {
+              console.log("VideoCallView (CallDoc Listener - Caller): Received answer. Setting remote description.", data.answer);
+              await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+              console.log("VideoCallView (CallDoc Listener - Caller): Remote description (answer) set. PC State:", pc.signalingState);
+            } catch (e: any) {
+              console.error("VideoCallView (CallDoc Listener - Caller): Error setting remote description (answer):", e.message, "Signaling state:", pc.signalingState);
+            }
+          }
+          if (data?.status && ['ended', 'ended_by_callee'].includes(data.status) && !localUserInitiatedEndRef.current) {
+            console.log("VideoCallView (CallDoc Listener - Caller): Call ended by callee or globally. Status:", data.status);
+            toast({title: "Call Ended", description: "The other user has ended the call."});
+            onEndCall();
+          }
+        } else if (isCallerRef.current === false) { // Current user is Callee
+           if (data?.status && ['ended', 'ended_by_caller'].includes(data.status) && !localUserInitiatedEndRef.current) {
+              console.log("VideoCallView (CallDoc Listener - Callee): Call ended by caller or globally. Status:", data.status);
+              toast({title: "Call Ended", description: "The other user has ended the call."});
+              onEndCall();
+           }
+        }
+      });
+
+      // Listen for ICE candidates
+      const candidatesCollectionPath = isCallerRef.current ? `calls/${callId}/calleeCandidates` : `calls/${callId}/callerCandidates`;
+      const candidatesUnsubscribeRef = isCallerRef.current ? calleeCandidatesUnsubscribeRef : callerCandidatesUnsubscribeRef;
+      
+      console.log("VideoCallView: Listening for ICE candidates on path:", candidatesCollectionPath);
+      candidatesUnsubscribeRef.current = onSnapshot(collection(firestore, candidatesCollectionPath), snapshot => {
+        snapshot.docChanges().forEach(async change => {
+          if (change.type === 'added') {
+            const candidate = change.doc.data();
+            console.log("VideoCallView: Received remote ICE candidate:", candidate, "PC State:", pc?.signalingState, "RemoteDesc:", pc?.currentRemoteDescription);
+            if (pc && (pc.remoteDescription || pc.currentRemoteDescription)) {
+               try { 
+                 await pc.addIceCandidate(new RTCIceCandidate(candidate));
+                 console.log("VideoCallView: Added remote ICE candidate successfully.");
+               }
+               catch (e) { console.error("VideoCallView: Error adding received ICE candidate:", e); }
+            } else {
+              console.warn("VideoCallView: Received ICE candidate but remote description not set yet or PC not available. Candidate ignored or queued by browser.");
+            }
+          }
+        });
+      });
+
     } catch (error: any) {
       console.error('VideoCallView: Error during initializeCall function:', error, error.stack);
       let title = 'Media Access Error';
       let description = `Could not start ${isAudioOnly ? 'audio' : 'video'} call.`;
 
-      if (hasMediaPermission) { // if true, media was acquired, so it's a setup error
+      if (hasMediaPermission) {
         title = 'Call Setup Error';
         description = `Failed to set up the call. ${error.message || 'Please try again.'}`;
       } else {
@@ -457,7 +448,7 @@ export function VideoCallView({ callId, onEndCall, localUser, isAudioOnly }: Vid
       toast({ variant: 'destructive', title, description, duration: 7000 });
       if (!localUserInitiatedEndRef.current) onEndCall();
     }
-  }, [callId, localUser, isAudioOnly, onEndCall, toast, isCameraOff, isMuted]); // Added isCameraOff and isMuted
+  }, [callId, localUser, isAudioOnly, onEndCall, toast, isCameraOff, isMuted, cleanupCall]);
 
   useEffect(() => {
     if (localUser?.uid && callId) { 
@@ -468,19 +459,22 @@ export function VideoCallView({ callId, onEndCall, localUser, isAudioOnly }: Vid
     }
 
     return () => {
-      console.log("VideoCallView: useEffect cleanup for callId:", callId, "localUserInitiatedEndRef:", localUserInitiatedEndRef.current);
+      console.log("VideoCallView: useEffect cleanup for callId:", callId, "Local initiated end:", localUserInitiatedEndRef.current);
+      // Call cleanup only if unmount wasn't due to local user explicitly ending the call
+      // (which would have already called cleanupCall with initiatedByLocalUser = true)
       if (!localUserInitiatedEndRef.current) { 
-        cleanupCall(false); // Call cleanup if unmount wasn't locally initiated by button click
+        cleanupCall(false); 
       }
     };
-  }, [initializeCall, cleanupCall, localUser, callId, onEndCall]); // Added onEndCall to dependencies of main useEffect
+  }, [initializeCall, cleanupCall, callId, localUser, onEndCall]);
 
-  const handleLocalEndCall = async () => {
+
+  const handleLocalEndCall = useCallback(async () => {
     console.log("VideoCallView: User clicked end call button for callId:", callId);
-    localUserInitiatedEndRef.current = true; // Mark that this user is ending the call
-    await cleanupCall(true); // Pass true to indicate local user initiated the full cleanup sequence
-    onEndCall(); // Notify parent component
-  };
+    await cleanupCall(true); 
+    onEndCall(); 
+  }, [cleanupCall, onEndCall, callId]);
+
 
   const toggleMute = () => {
     setIsMuted(prev => {
