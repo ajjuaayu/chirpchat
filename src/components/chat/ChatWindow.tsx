@@ -61,12 +61,11 @@ export function ChatWindow() {
 
   const startCall = (type: CallType) => {
     if (isCallActive) {
-      // If a call is already active, and the user clicks a call button,
-      // it should effectively be an "end call" action if it's for the current type,
-      // or potentially switch if we allowed that (not implemented).
-      // For simplicity, any call button click while a call is active ends the current call.
-      handleEndCall();
-      if (type === currentCallType) return; // If ending the same type, don't restart
+      // If a call is active, clicking any call button (even different type) ends the current call.
+      // If it was the same type, it effectively acts as an end call button.
+      // If it was a different type, it ends current then immediately starts new (handled by VideoCallView re-mount)
+      handleEndCall(); 
+      if (type === currentCallType) return; // If ending the same type, don't immediately restart
     }
     
     if (!currentUser) {
@@ -74,10 +73,12 @@ export function ChatWindow() {
       return;
     }
     
-    const callId = GENERAL_CHAT_CALL_ID; // Use the fixed call ID for General Chat
+    // For General Chat, we use a fixed call ID.
+    // In a real app, you'd generate unique IDs for different calls or use room-based IDs.
+    const callId = GENERAL_CHAT_CALL_ID; 
     setCurrentCallId(callId);
     setCurrentCallType(type);
-    setIsCallActive(true);
+    setIsCallActive(true); // This will render VideoCallView
     console.log(`ChatWindow: Starting ${type} call with fixed ID:`, callId);
   };
 
@@ -93,7 +94,7 @@ export function ChatWindow() {
             size="icon" 
             onClick={() => startCall("audio")}
             aria-label={isCallActive && currentCallType === "audio" ? "End audio call" : "Start audio call"}
-            disabled={!currentUser && !(isCallActive && currentCallType === "audio")}
+            disabled={!currentUser && !(isCallActive && currentCallType === "audio")} // Allow ending if active, even if user logs out somehow mid-call
             className={(isCallActive && currentCallType === "audio") ? "text-destructive hover:text-destructive/90 hover:bg-destructive/10" : ""}
           >
             {isCallActive && currentCallType === "audio" ? <PhoneOff className="h-5 w-5" /> : <Phone className="h-5 w-5" />}
@@ -145,8 +146,9 @@ export function ChatWindow() {
         </div>
       </header>
       
-      {isCallActive && currentCallId && currentUser && currentCallType ? (
+      {isCallActive && currentCallId && currentUser && currentCallType !== null ? (
         <VideoCallView 
+          key={currentCallId + currentCallType} // Force re-mount if callId or type changes
           callId={currentCallId} 
           onEndCall={handleEndCall} 
           localUser={currentUser}
