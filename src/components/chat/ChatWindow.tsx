@@ -19,10 +19,8 @@ import { useState, useCallback } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { VideoCallView } from "./VideoCallView"; 
 
-// Use type-specific IDs for the general chat channel
 const GENERAL_CHAT_AUDIO_CALL_ID = "call_channel_general_chat_audio";
 const GENERAL_CHAT_VIDEO_CALL_ID = "call_channel_general_chat_video";
-
 
 type CallType = "video" | "audio";
 
@@ -64,14 +62,11 @@ export function ChatWindow() {
 
   const startCall = (type: CallType) => {
     if (isCallActive && currentCallType === type) {
-      // If the same type of call button is clicked again, end the current call
       handleEndCall();
       return; 
     }
     
     if (isCallActive && currentCallType !== type) {
-        // If a different type of call button is clicked while a call is active, end the current one first.
-        // VideoCallView will unmount, then a new one will mount for the new type.
         handleEndCall();
     }
     
@@ -80,12 +75,11 @@ export function ChatWindow() {
       return;
     }
     
-    // Determine the call ID based on the type for the general chat
     const callId = type === "audio" ? GENERAL_CHAT_AUDIO_CALL_ID : GENERAL_CHAT_VIDEO_CALL_ID;
     
     setCurrentCallId(callId);
     setCurrentCallType(type);
-    setIsCallActive(true); // This will render VideoCallView
+    setIsCallActive(true);
     console.log(`ChatWindow: Starting ${type} call with ID:`, callId);
   };
 
@@ -155,7 +149,7 @@ export function ChatWindow() {
       
       {isCallActive && currentCallId && currentUser && currentCallType !== null ? (
         <VideoCallView 
-          key={currentCallId + currentCallType} // Force re-mount if callId or type changes
+          key={currentCallId} // Force re-mount if callId changes, type is handled by isAudioOnly prop
           callId={currentCallId} 
           onEndCall={handleEndCall} 
           localUser={currentUser}
